@@ -34,8 +34,12 @@ jobs:
         run: |
           wget https://github.com/tinygo-org/tinygo/releases/download/v0.41.1/tinygo_0.41.1_amd64.deb
           sudo dpkg -i tinygo_0.41.1_amd64.deb
+      # -buildmode=c-shared produces a WASI reactor module: exports `_initialize`
+      # for one-shot runtime setup, and stays callable afterward. Default
+      # -target=wasi alone produces a command module that calls proc_exit at
+      # the end of main and is unusable from a host loop.
       - name: Build WASM
-        run: tinygo build -o plugin-http.wasm -target=wasi ./
+        run: tinygo build -o plugin-http.wasm -target=wasi -buildmode=c-shared ./
       - name: Check WASM size
         run: ls -lh plugin-http.wasm
       - uses: actions/upload-artifact@v4
