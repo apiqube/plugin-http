@@ -1,44 +1,70 @@
 package main
 
-// Host functions provided by the ApiQube engine to this plugin.
+import (
+	"encoding/json"
+	"errors"
+)
+
+// Host imports are split across two build-tagged files:
 //
-// When built as a WASM module, these are linked at load time by wazero.
-// The //go:wasmimport directive only takes effect under TinyGo WASI build,
-// so a regular `go build` compiles the stubs below cleanly.
+//	host_wasm.go  (build: wasip1) — //go:wasmimport declarations, no bodies
+//	host_stub.go  (build: !wasip1) — pure-Go stubs so unit tests compile
+//
+// The wrapper functions in this file are tag-agnostic and can be called from
+// any test or export.
 
-// httpResponse mirrors what the host returns from host_http_request.
-type httpResponse struct {
-	Status     int               `json:"status"`
-	Headers    map[string]string `json:"headers"`
-	Body       []byte            `json:"body"`
-	DurationMs int64             `json:"duration_ms"`
-	Error      string            `json:"error,omitempty"`
+// callHostLog packs a level/message pair into a host_log call.
+func callHostLog(level int, message string) {
+	if message == "" {
+		return
+	}
+	packed := writeBytes([]byte(message))
+	if packed == 0 {
+		return
+	}
+	hostLogImport(uint32(level), uint32(packed>>32), uint32(packed))
 }
 
-// httpRequest is the Go-friendly wrapper around host_http_request.
-func httpRequest(method, url string, headers map[string]string, body []byte) (*httpResponse, error) {
-	// TODO: implementation
-	// 1. Marshal headers to JSON
-	// 2. Pack method/url/headers/body as ptr+len pairs
-	// 3. Call hostHTTPRequestImport (see below)
-	// 4. Read response bytes, unmarshal into httpResponse
-	_ = method
-	_ = url
-	_ = headers
-	_ = body
-	return nil, nil
+// callHostNow returns the current host clock in Unix milliseconds.
+func callHostNow() int64 {
+	return int64(hostNowImport())
 }
 
-// logMessage sends a log line to the host for display/storage.
-func logMessage(level, msg string) {
-	// TODO: implementation via host_log import
-	_ = level
-	_ = msg
+// EmitEvent emits a plugin event to the host. Failure to encode is silent —
+// streaming events are best-effort; missing one is preferable to crashing
+// the plugin mid-execute.
+func EmitEvent(plugin, kind string, data map[string]any) {
+	ev := PluginEvent{Plugin: plugin, Kind: kind, Data: data}
+	raw, err := json.Marshal(ev)
+	if err != nil {
+		return
+	}
+	packed := writeBytes(raw)
+	if packed == 0 {
+		return
+	}
+	hostEmitEventImport(uint32(packed>>32), uint32(packed))
 }
 
-// now returns the current Unix timestamp in milliseconds from the host.
-// (Plugins don't have direct access to system clock in WASI.)
-func now() int64 {
-	// TODO: implementation via host_now import
-	return 0
+// callHostHTTPRequest sends a HostHTTPRequest to the engine and decodes the
+// response. The host returns 0 on a write failure; we surface that as an
+// explicit error.
+func callHostHTTPRequest(req HostHTTPRequest) (HostHTTPResponse, error) {
+	raw, err := json.Marshal(req)
+	if err != nil {
+		return HostHTTPResponse{}, err
+	}
+	inPacked := writeBytes(raw)
+	if inPacked == 0 {
+		return HostHTTPResponse{}, errors.New("plugin: failed to allocate request bytes")
+	}
+	outPacked := hostHTTPRequestImport(uint32(inPacked>>32), uint32(inPacked))
+	if outPacked == 0 {
+		return HostHTTPResponse{}, errors.New("plugin: host returned no response")
+	}
+	var resp HostHTTPResponse
+	if err := json.Unmarshal(readBytes(outPacked), &resp); err != nil {
+		return HostHTTPResponse{}, err
+	}
+	return resp, nil
 }

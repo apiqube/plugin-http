@@ -1,49 +1,58 @@
 package main
 
-// info returns the PluginInfo for this plugin.
-// Called from exported plugin_info() and defines all manifest fields
-// users can write in their YAML when targeting http:// or https:// URLs.
-func info() PluginInfo {
+// Info returns the PluginInfo for plugin-http.
+//
+// This is the metadata the host reads via plugin_info. It declares:
+//   - the protocols this plugin handles (http, https)
+//   - the host capabilities required (http)
+//   - the manifest fields user tests can set
+//   - the events this plugin can emit during execute
+//
+// method and resource are NOT declared here — they are core fields on every
+// TestInput. Plugin-http reads them via input.Method and input.Resource.
+func Info() PluginInfo {
 	return PluginInfo{
-		Name:        "http",
-		Version:     "0.1.0",
-		Description: "HTTP executor for ApiQube — sends requests, collects responses.",
-		Protocols:   []string{"http", "https"},
+		Name:         "http",
+		Version:      "0.1.0",
+		Description:  "HTTP executor for ApiQube — sends requests, collects responses.",
+		Protocols:    []string{"http", "https"},
+		Capabilities: []string{"http"},
 		Fields: map[string]FieldSpec{
-			"method": {
-				Type:        "string",
-				Required:    true,
-				Description: "HTTP method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS).",
-			},
-			"endpoint": {
-				Type:        "string",
-				Required:    false,
-				Description: "Path relative to the target base URL (e.g. /users/1). Use this OR url.",
-			},
-			"url": {
-				Type:        "string",
-				Required:    false,
-				Description: "Absolute URL override, ignoring target. Use this OR endpoint.",
-			},
 			"body": {
 				Type:        "any",
-				Required:    false,
-				Description: "Request body. Marshaled to JSON unless Content-Type says otherwise.",
+				Description: "Request body. Marshaled to JSON unless Content-Type overrides.",
 			},
 			"query": {
 				Type:        "map",
-				Required:    false,
 				Description: "URL query parameters as key-value pairs.",
 			},
-			"follow_redirects": {
-				Type:        "bool",
-				Required:    false,
-				Description: "Whether to follow HTTP redirects (default: true).",
+			"url": {
+				Type:        "string",
+				Description: "Absolute URL override; takes precedence over target+resource.",
 			},
-			"max_redirects": {
+			"followRedirects": {
+				Type:        "bool",
+				Description: "Whether to follow HTTP redirects (default true).",
+			},
+			"maxRedirects": {
 				Type:        "number",
-				Required:    false,
-				Description: "Maximum number of redirects to follow (default: 10).",
+				Description: "Maximum number of redirects to follow (default 10).",
+			},
+		},
+		Events: map[string]EventSpec{
+			"Sent": {
+				Description: "Request was sent to the target.",
+				Fields: map[string]FieldSpec{
+					"method": {Type: "string"},
+					"url":    {Type: "string"},
+				},
+			},
+			"Received": {
+				Description: "Response was received from the target.",
+				Fields: map[string]FieldSpec{
+					"status":      {Type: "number"},
+					"duration_ms": {Type: "number"},
+				},
 			},
 		},
 	}

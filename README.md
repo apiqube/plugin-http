@@ -3,26 +3,29 @@
 > HTTP executor plugin for [ApiQube](https://github.com/apiqube).
 
 [![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-Scaffold-yellow?style=flat-square)]()
+[![Status](https://img.shields.io/badge/Status-Active%20Development-brightgreen?style=flat-square)]()
 
-This is a built-in WASM plugin for the ApiQube testing engine. It handles any
-test whose target starts with `http://` or `https://`.
+This is the first-party WASM plugin for the ApiQube testing engine. Engine routes any test whose target starts with `http://` or `https://` to this plugin via the `host` capability.
 
 ## Protocols
 
 `http`, `https`
 
-## Manifest Fields
+## Capabilities required
 
-| Field              | Type   | Required | Description |
-|--------------------|--------|----------|-------------|
-| `method`           | string | yes      | HTTP method (GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS) |
-| `endpoint`         | string | no       | Path relative to target base URL |
-| `url`              | string | no       | Absolute URL override |
-| `body`             | any    | no       | Request body (marshaled to JSON) |
-| `query`            | map    | no       | URL query parameters |
-| `follow_redirects` | bool   | no       | Follow HTTP redirects (default: true) |
-| `max_redirects`    | number | no       | Max redirects (default: 10) |
+`http` (provided by the engine via `host_http_request`).
+
+## Manifest fields
+
+The HTTP method and path live on the core `TestInput.Method` / `TestInput.Resource` fields, not in `fields:` — the same as for any other ApiQube plugin. The fields below are HTTP-specific extensions:
+
+| Field             | Type   | Description |
+|-------------------|--------|-------------|
+| `body`            | any    | Request body. Marshaled to JSON unless Content-Type overrides. |
+| `query`           | map    | URL query parameters as key-value pairs. |
+| `url`             | string | Absolute URL override; takes precedence over target+resource. |
+| `followRedirects` | bool   | Whether to follow HTTP redirects (default true). |
+| `maxRedirects`    | number | Maximum number of redirects to follow (default 10). |
 
 ## Example
 
@@ -32,23 +35,43 @@ target: http://localhost:8081
 tests:
   - name: Create user
     method: POST
-    endpoint: /users
+    resource: /users
     body:
       name: "{{ fake.name }}"
       email: "{{ fake.email }}"
     expect:
       status: 201
+
+  - name: Search active users
+    method: GET
+    resource: /users
+    query:
+      status: active
+      limit: 50
+    expect:
+      status: 200
+      body.length: "> 0"
 ```
 
 ## Build
 
-```bash
+```
 tinygo build -o plugin-http.wasm -target=wasi ./
 ```
 
+CI builds and uploads the artifact on every push.
+
+## Test
+
+```
+go test ./...
+```
+
+The Go-side tests cover URL composition, header handling, body encoding, the contract types, and the WASM exports through their JSON wire interface. End-to-end tests run inside the engine module against a CI-built `plugin-http.wasm`.
+
 ## Install
 
-```bash
+```
 qube plugin install plugin-http.wasm
 ```
 

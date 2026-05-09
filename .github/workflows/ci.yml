@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  vet:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,6 +19,7 @@ jobs:
         with:
           go-version: '1.26.x'
       - run: go vet ./...
+      - run: go test -cover ./...
 
   build-wasm:
     runs-on: ubuntu-latest

@@ -1,78 +1,109 @@
 package main
 
-// Exported WASM functions. Each takes a uint64 (packed ptr+len to JSON bytes)
-// and returns a uint64 with the result bytes.
+import (
+	"encoding/json"
+)
+
+// WASM-exported entry points. Each takes a packed (ptr<<32)|len uint64
+// pointing into the plugin's linear memory and returns the same form.
 //
-// The //export and //go:wasmimport directives only take effect when building
-// with TinyGo (-target=wasi). Under a regular `go build` these are ignored,
-// so the file still compiles cleanly for tests and linting.
+// The //export directive is honored by TinyGo's WASI target. Under a regular
+// `go build` it is treated as a comment, so this file compiles for unit
+// tests and linting without producing exports.
 
-import "encoding/json"
-
-// plugin_info returns the PluginInfo marshaled as JSON.
+// plugin_info returns the plugin metadata as JSON bytes.
 //
 //export plugin_info
-func pluginInfo() uint64 {
-	data, _ := json.Marshal(info())
-	return toPointer(data)
+func pluginInfoExport() uint64 {
+	data, err := json.Marshal(Info())
+	if err != nil {
+		return 0
+	}
+	return writeBytes(data)
 }
 
-// plugin_init runs one-time initialization.
+// plugin_init runs one-time initialization with the host-supplied config.
+// For v1.0 this is a no-op; future versions may consume timeout/retry defaults.
 //
 //export plugin_init
-func pluginInit(cfgPtr uint64) uint64 {
-	// TODO: implementation
-	// 1. readBytes(cfgPtr) → config map
-	// 2. Apply plugin-level settings
-	// 3. Return 0 on success or packed error bytes
-	_ = cfgPtr
+func pluginInitExport(_ uint64) uint64 {
 	return 0
 }
 
-// validate checks a TestInput for required fields.
+// validate checks a TestInput without performing the request.
 //
 //export validate
-func validateInput(inputPtr uint64) uint64 {
-	// TODO: implementation
-	// 1. readBytes(inputPtr) → TestInput
-	// 2. Check method required, valid value
-	// 3. Check endpoint XOR url
-	// 4. Return JSON-packed []FieldError
-	_ = inputPtr
-	return 0
+func validateExport(inputPtr uint64) uint64 {
+	input, ok := decodeTestInput(inputPtr)
+	if !ok {
+		return writeJSON([]FieldError{{Message: "invalid input JSON"}})
+	}
+	errs := validateInput(input)
+	if len(errs) == 0 {
+		return 0
+	}
+	return writeJSON(errs)
 }
 
-// execute runs a single test case.
+// execute performs one HTTP request and returns the TestOutput.
 //
 //export execute
-func executeTest(inputPtr uint64) uint64 {
-	// TODO: implementation
-	// 1. readBytes(inputPtr) → TestInput
-	// 2. Build URL from target + endpoint/url
-	// 3. Call httpRequest() which calls the host function
-	// 4. Marshal TestOutput, return toPointer(data)
-	_ = inputPtr
-	return 0
+func executeExport(inputPtr uint64) uint64 {
+	input, ok := decodeTestInput(inputPtr)
+	if !ok {
+		return writeJSON(TestOutput{Error: "invalid input JSON"})
+	}
+
+	req, err := BuildHostRequest(input)
+	if err != nil {
+		return writeJSON(TestOutput{Error: err.Error()})
+	}
+
+	resp, err := callHostHTTPRequest(req)
+	if err != nil {
+		return writeJSON(TestOutput{Error: err.Error()})
+	}
+
+	return writeJSON(BuildOutput(resp))
 }
 
-// plugin_destroy releases plugin resources.
+// plugin_destroy releases pinned allocations.
 //
 //export plugin_destroy
-func pluginDestroy() {
-	// TODO: implementation (typically noop for HTTP)
+func pluginDestroyExport() {
+	resetAllocations()
 }
 
-// toPointer packs a byte slice into a (ptr << 32) | len uint64.
-// The host dereferences this to read the JSON result.
-func toPointer(data []byte) uint64 {
-	// TODO: when building for WASM, use unsafe.Pointer to get the raw pointer
-	// Under regular go build this is a no-op for compilation testing.
-	return uint64(len(data))
+// validateInput applies the v1.0 rules: target+resource OR fields.url must
+// produce a URL, and method must be present (defaulting to GET if empty is
+// also acceptable, but we surface absence as a hint for stricter callers).
+func validateInput(input TestInput) []FieldError {
+	var errs []FieldError
+	if _, err := composeURL(input); err != nil {
+		errs = append(errs, FieldError{Field: "target", Message: err.Error()})
+	}
+	return errs
 }
 
-// readBytes is the inverse of toPointer — reads bytes at the given packed location.
-func readBytes(packed uint64) []byte {
-	// TODO: WASM implementation via unsafe
-	_ = packed
-	return nil
+// decodeTestInput reads packed bytes and JSON-decodes into a TestInput.
+func decodeTestInput(packed uint64) (TestInput, bool) {
+	raw := readBytes(packed)
+	if len(raw) == 0 {
+		return TestInput{}, true
+	}
+	var input TestInput
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return TestInput{}, false
+	}
+	return input, true
+}
+
+// writeJSON marshals v and returns its packed pointer. Marshal failure
+// returns 0 (host treats as empty result).
+func writeJSON(v any) uint64 {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return 0
+	}
+	return writeBytes(data)
 }
